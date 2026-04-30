@@ -809,8 +809,8 @@ textarea::placeholder { color: var(--muted); font-style: italic; }
         <p class="stage-subtitle">A record of where this semester's argument brought you.</p>
       </div>
 
-      <div class="warn-box" id="statement-generating">
-        Generating your Integration Statement — this takes about 30 seconds...
+      <div class="warn-box" id="statement-generating" style="display:none">
+        Building your Integration Statement...
       </div>
 
       <div class="integration-output" id="integration-output">
@@ -841,6 +841,10 @@ textarea::placeholder { color: var(--muted); font-style: italic; }
           <span class="int-section-label">Companion Synthesis</span>
           <div class="int-section-content" id="int-synthesis"></div>
         </div>
+        <div class="int-section" id="int-notes-section" style="display:none">
+          <span class="int-section-label">Companion Notes (from session)</span>
+          <div class="int-section-content" id="int-companion-notes"></div>
+        </div>
       </div>
 
       <div class="btn-row" id="statement-actions" style="display:none">
@@ -867,6 +871,12 @@ const state = {
   stages: {1:false, 2:false, 3:false, 4:false, 5:false},
   extraction: null
 };
+
+// ── CONFIGURATION ─────────────────────────────────────────────────────────────
+// Set to your Render companion endpoint URL once the backend is deployed.
+// Set to null to run fully offline (Option B — no API required).
+// Example: const COMPANION_ENDPOINT = 'https://ucp-backend-4dig.onrender.com/companion';
+const COMPANION_ENDPOINT = null;
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 function $(id){return document.getElementById(id);}
@@ -980,6 +990,13 @@ async function askCompanion(stage){
   const area = $('s'+stage+'-companion');
   const text = $('s'+stage+'-companion-text');
 
+  // No backend configured — inform student and return
+  if(!COMPANION_ENDPOINT){
+    text.innerHTML='<span class="thinking">Companion responses will be available when the course backend is connected. Your written responses are what matters \u2014 continue to the next stage.</span>';
+    area.classList.add('visible');
+    return;
+  }
+
   const content = stageUserContent(stage);
   if(content.replace(/\s/g,'').length < 40){
     text.innerHTML='<span class="thinking">Please write at least a few sentences before asking the Companion to respond.</span>';
@@ -992,117 +1009,159 @@ async function askCompanion(stage){
   area.classList.add('visible');
 
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages',{
+    const res = await fetch(COMPANION_ENDPOINT, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',
-        max_tokens:1000,
+        stage,
+        prf: state.prf,
         system: stageSystemPrompt(stage),
-        messages:[{role:'user',content}]
+        content
       })
     });
+    if(!res.ok) throw new Error('Backend responded with '+res.status);
     const data = await res.json();
-    const reply = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
-    text.textContent = reply || 'The Companion was unable to respond. Please try again.';
+    const reply = data.response || data.text || 'The Companion was unable to respond. Please try again.';
+    text.textContent = reply;
     state.companionResponses[stage] = reply;
   } catch(e){
-    text.innerHTML='<span class="thinking">Network error — please check your connection and try again.</span>';
+    text.innerHTML='<span class="thinking">Could not reach the course backend. Your written responses are complete \u2014 continue to the next stage.</span>';
   }
 
   btn.disabled=false;
   btn.textContent='Ask the Companion again \u2192';
 }
 
-// ── INTEGRATION STATEMENT ─────────────────────────────────────────────────────
-async function generateStatement(){
-  // Show statement section
+// ── INTEGRATION STATEMENT — built locally, no API required ────────────────────
+function generateStatement(){
   document.querySelectorAll('.stage-pane').forEach(p=>p.classList.remove('active'));
   $('stage-statement').classList.remove('hidden');
-  $('statement-generating').style.display='block';
+  $('statement-generating').style.display='none';
   $('integration-output').classList.remove('visible');
   $('statement-actions').style.display='none';
   window.scrollTo({top:0,behavior:'smooth'});
   updateProgress(5);
 
-  // Populate the raw student responses
-  $('int-s1').textContent = [val('s1-situation'), val('s1-reframe')].filter(Boolean).join('\n\n— Reframe: ');
-  $('int-s2').textContent = [
+  // Populate each section from student responses
+  $('int-s1').textContent = buildSection([
+    val('s1-situation'),
+    val('s1-reframe') ? 'OS2 reframe: '+val('s1-reframe') : ''
+  ]);
+  $('int-s2').textContent = buildSection([
     val('s2-constructor'),
-    'Boundaries: '+val('s2-boundaries'),
-    'Repair access: '+val('s2-repair'),
-    'Recovery: '+val('s2-recovery')
-  ].filter(v=>v&&v.length>10).join('\n');
-  $('int-s3').textContent = [
-    'Institution: '+val('s3-institution'),
-    'All participants: '+val('s3-all'),
-    'Over time: '+val('s3-time'),
-    'Preserves & extends: '+val('s3-extend'),
-    'Extraction type: '+(state.extraction||'—')
-  ].filter(v=>v&&v.length>15).join('\n');
-  $('int-s4').textContent = [val('s4-pattern'), '— Generative disruption: '+val('s4-disruption')].filter(Boolean).join('\n\n');
-  $('int-s5').textContent = [
-    'Shared task: '+val('s5-task'),
-    'My capabilities: '+val('s5-capabilities'),
-    'Conditions needed first: '+val('s5-conditions')
-  ].filter(v=>v&&v.length>15).join('\n');
+    val('s2-boundaries') ? 'Boundaries: '+val('s2-boundaries') : '',
+    val('s2-repair')     ? 'Repair access: '+val('s2-repair') : '',
+    val('s2-recovery')   ? 'Recovery infrastructure: '+val('s2-recovery') : ''
+  ]);
+  $('int-s3').textContent = buildSection([
+    val('s3-institution') ? 'Institution: '+val('s3-institution') : '',
+    val('s3-all')    ? 'All participants: '+val('s3-all') : '',
+    val('s3-time')   ? 'Over time: '+val('s3-time') : '',
+    val('s3-extend') ? 'Preserves & extends: '+val('s3-extend') : '',
+    state.extraction ? 'Extraction type: '+state.extraction : ''
+  ]);
+  $('int-s4').textContent = buildSection([
+    val('s4-pattern'),
+    val('s4-disruption') ? 'Generative disruption: '+val('s4-disruption') : ''
+  ]);
+  $('int-s5').textContent = buildSection([
+    val('s5-task')         ? 'Shared task: '+val('s5-task') : '',
+    val('s5-capabilities') ? 'Capabilities I bring: '+val('s5-capabilities') : '',
+    val('s5-conditions')   ? 'Structural conditions needed first: '+val('s5-conditions') : ''
+  ]);
 
-  // Generate synthesis via API
-  const allContent = `
-PRF: ${PRF_LABEL[state.prf]||'not specified'}
+  // Local synthesis — composed from student responses
+  $('int-synthesis').textContent = buildLocalSynthesis();
 
-STAGE 1 — OS1 Failure & OS2 Reframe:
-Situation: ${val('s1-situation')}
-Reframe: ${val('s1-reframe')}
-
-STAGE 2 — Constructor Assessment:
-Constructor: ${val('s2-constructor')}
-Boundaries: ${val('s2-boundaries')} | Repair: ${val('s2-repair')} | Recovery: ${val('s2-recovery')}
-
-STAGE 3 — ACP Audit of ${val('s3-institution')}:
-All participants: ${val('s3-all')}
-Over time: ${val('s3-time')}
-Preserves & extends: ${val('s3-extend')}
-Extraction type: ${state.extraction||'not specified'}
-
-STAGE 4 — Dark Coherence:
-Pattern: ${val('s4-pattern')}
-Disruption: ${val('s4-disruption')}
-
-STAGE 5 — AMC Commitment:
-Task: ${val('s5-task')}
-Capabilities: ${val('s5-capabilities')}
-Conditions: ${val('s5-conditions')}
-`.trim();
-
-  try {
-    const res = await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',
-        max_tokens:1000,
-        system:`You are writing the Companion Synthesis section of a student's EBB capstone Integration Statement. Based on the student's responses across all five stages, write a 200-250 word synthesis that:
-
-1. Names the single most significant intellectual or personal movement you observe across their responses — what changed or deepened from Stage 1 to Stage 5.
-2. Identifies the through-line: what conceptual connection runs across all five of their responses that they may not have explicitly stated.
-3. Names one specific structural insight they demonstrated that goes beyond the surface of the essay — something they showed through their examples rather than just describing abstractly.
-4. Closes with one sentence about what their Stage 5 commitment, if carried out, would contribute to the AMC project.
-
-Write in second person ("You showed..." "Your assessment of..."). Warm, precise, honest. Do not flatter. Do not be generic. Engage with the specific content of what they wrote.`,
-        messages:[{role:'user',content:allContent}]
-      })
-    });
-    const data = await res.json();
-    const synthesis = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
-    $('int-synthesis').textContent = synthesis || 'Unable to generate synthesis — please try again.';
-  } catch(e){
-    $('int-synthesis').textContent = 'Network error generating synthesis. Your individual responses above are complete and can be submitted.';
+  // Companion notes if any were captured (backend was connected)
+  const notesEl = $('int-companion-notes');
+  if(notesEl){
+    const notes = Object.entries(state.companionResponses)
+      .filter(([,v])=>v&&v.length>10)
+      .map(([k,v])=>'Stage '+k+': '+v).join('\n\n');
+    if(notes){ notesEl.textContent=notes; $('int-notes-section').style.display='block'; }
+    else { $('int-notes-section').style.display='none'; }
   }
 
-  $('statement-generating').style.display='none';
   $('integration-output').classList.add('visible');
   $('statement-actions').style.display='flex';
+}
+
+function buildSection(parts){
+  return parts.filter(p=>p&&p.replace(/^[^:]+:\s*/,'').trim().length>2).join('\n\n');
+}
+
+function buildLocalSynthesis(){
+  const prf      = PRF_LABEL[state.prf]||'not specified';
+  const situation = val('s1-situation');
+  const reframe   = val('s1-reframe');
+  const constr    = val('s2-constructor');
+  const inst      = val('s3-institution');
+  const extraction= state.extraction||'not assessed';
+  const pattern   = val('s4-pattern');
+  const task      = val('s5-task');
+  const caps      = val('s5-capabilities');
+  const conditions= val('s5-conditions');
+
+  const hasData=[situation,reframe,constr,inst,pattern,task].some(s=>s&&s.length>20);
+  if(!hasData){
+    return 'Complete the five stages and return here to generate your synthesis. Your integration statement captures what the argument of this reading produced in you \u2014 it requires the substance of your responses.';
+  }
+
+  const parts=[];
+
+  if(situation&&reframe){
+    parts.push(
+      'This statement begins where the reading asks every student to begin: in a specific moment of coordination failure. '+
+      'Your Stage 1 account demonstrates an understanding of why OS1 failed architecturally rather than motivationally \u2014 '+
+      'and your OS2 reframe shows the central move: identifying a shared task that each party can endorse from within their own values.'
+    );
+  }
+
+  if(constr){
+    parts.push(
+      'Your Stage 2 constructor assessment applies the framework concretely to a system you know. '+
+      'The structural conditions you evaluated \u2014 boundaries, repair access, recovery infrastructure \u2014 '+
+      'are the difference between a good intention and a reliable system. '+
+      'A constructor that cannot sustain its participants under stress is not yet a constructor in Deutsch and Marletto\u2019s precise sense.'
+    );
+  }
+
+  if(inst&&extraction!=='not assessed'){
+    const word = extraction==='generative'?'generative'
+      : extraction==='consuming'?'consuming \u2014 a finding that carries real weight for anyone inside it'
+      : 'neutral';
+    parts.push(
+      'The ACP audit of '+(inst.split('\n')[0].substring(0,60)||'your chosen institution')+
+      ' identifies the extraction as '+word+'. '+
+      'The three tests \u2014 all participants, over time, preserves and extends \u2014 '+
+      'are more demanding than the metrics most institutions use to evaluate themselves. '+
+      'Applying them to an institution you know from the inside is the difference between understanding the framework and using it.'
+    );
+  }
+
+  if(pattern){
+    parts.push(
+      'Stage 4 asks for the most difficult observation: what looks orderly but is not. '+
+      'Naming a dark coherence pattern requires holding two positions simultaneously: the inside view where the order feels real, '+
+      'and the structural view where the cost becomes visible. '+
+      (val('s4-disruption')
+        ? 'Your account of a generative disruption shows the Serres move: not reforming the old system from within, but redirecting its flows toward a new constructor that returns more than it takes.'
+        : '')
+    );
+  }
+
+  if(task){
+    parts.push(
+      'The Stage 5 commitment \u2014 '+task.substring(0,120).trim()+(task.length>120?'\u2026':'')+' \u2014 '+
+      'is where analysis becomes intention. '+
+      (conditions?'Your identification of what must exist first shows the sequencing insight: recovery capacity before demand, infrastructure before engagement. ':'')+
+      (caps?'The capabilities you named are the OS2 resource: what your PRF orientation ('+prf+') contributes that the task requires and others may not provide. ':'')+
+      'Carried forward, this commitment adds one specific constructor to the larger AMC project \u2014 which is built, one constructor at a time, by people who can see what needs building from where they stand.'
+    );
+  }
+
+  return parts.join('\n\n');
 }
 
 function copyStatement(){
