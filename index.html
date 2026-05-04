@@ -990,7 +990,7 @@ async function askCompanion(stage){
   const area = $('s'+stage+'-companion');
   const text = $('s'+stage+'-companion-text');
 
-  // No backend configured — inform student and return
+  // No backend configured
   if(!COMPANION_ENDPOINT){
     text.innerHTML='<span class="thinking">Companion responses will be available when the course backend is connected. Your written responses are what matters \u2014 continue to the next stage.</span>';
     area.classList.add('visible');
@@ -1005,33 +1005,56 @@ async function askCompanion(stage){
   }
 
   btn.disabled=true; btn.textContent='Thinking...';
-  text.innerHTML='<span class="thinking">Reading what you wrote...</span>';
+  text.innerHTML='<span class="thinking">Reading what you wrote\u2014this may take up to 30 seconds...</span>';
   area.classList.add('visible');
+
+  // AbortController gives us a 50-second client-side timeout
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 50000);
 
   try {
     const res = await fetch(COMPANION_ENDPOINT, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
+      signal: controller.signal,
       body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',
+        model:'claude-sonnet-4-5-20251001',
         max_tokens:600,
         system: stageSystemPrompt(stage),
         messages:[{role:'user',content}]
       })
     });
-    if(!res.ok) throw new Error('Backend responded with '+res.status);
+    clearTimeout(timeoutId);
+
+    if(!res.ok) throw new Error('status:'+res.status);
+
     const data = await res.json();
-    // claude-proxy returns the raw Anthropic response
     const reply = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('')
-      || data.response || 'The Companion was unable to respond. Please try again.';
+      || data.response || '';
+
+    if(!reply){
+      throw new Error('empty response');
+    }
+
     text.textContent = reply;
     state.companionResponses[stage] = reply;
-  } catch(e){
-    text.innerHTML='<span class="thinking">Could not reach the course backend. Your written responses are complete \u2014 continue to the next stage.</span>';
-  }
+    btn.disabled=false;
+    btn.textContent='Ask the Companion again \u2192';
 
-  btn.disabled=false;
-  btn.textContent='Ask the Companion again \u2192';
+  } catch(e){
+    clearTimeout(timeoutId);
+    const isTimeout = e.name === 'AbortError';
+    const isRetryable = isTimeout || (e.message && e.message.includes('status:5'));
+
+    if(isRetryable){
+      text.innerHTML='<span class="thinking">The server is taking longer than usual \u2014 this happens occasionally. Click the button below to try again, or continue to the next stage.</span>';
+    } else {
+      text.innerHTML='<span class="thinking">The Companion could not respond right now. You can try again or continue \u2014 your written responses are what matters.</span>';
+    }
+
+    btn.disabled=false;
+    btn.textContent='Try again \u2192';
+  }
 }
 
 // ── INTEGRATION STATEMENT — built locally, no API required ────────────────────
